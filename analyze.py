@@ -90,7 +90,7 @@ def select_relevant_convo(relevants):
     for i, folder in enumerate(relevants):
         # Opens the files to read the title
         msgs = json.load(open(join(folder, 'message.json')))
-        print('[%d]\t%s' % i, msgs['title'])
+        print('[%d]\t%s' % (i, msgs['title']))
 
     try:
         u = int(input('Enter index [0-%d]: ' % (len(relevants) - 1)))
@@ -335,7 +335,7 @@ def main():
     '''
     args = get_args()
 
-    convos = get_relevant_msg_folders(args.folder)
+    convos = list(get_relevant_msg_folders(args.folder))
 
     if args.person:
         relevants = get_relevant_people_folders(convos, args.person)[:args.limit]
@@ -351,6 +351,19 @@ def main():
 
         if relevant:
             analyze(relevant, args)
+    elif args.interactive:
+        relevants = None
+        relevant = None
+
+        while not relevant:
+            query = input('What conversation do you want to search for?\n')
+            relevants = get_relevant_people_folders(convos, query)[:args.limit]
+
+            if relevants:
+                relevant = select_relevant_convo(relevants)
+                analyze(relevant, args)
+            else:
+                print('Could not find `%s`. Please try again.' % query)
 
 if __name__ == '__main__':
     main()
