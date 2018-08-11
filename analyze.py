@@ -101,14 +101,20 @@ def select_relevant_convo(relevants):
     except:
         return None
 
+def _create_stats():
+    '''
+    Returns a sub-statistics profile
+    '''
+    return {k: 0 for k in DATA_COLLECTED.keys()}
+
 def create_stats(args):
     '''
     Returns a blank statistics profile, preferably for an interlocutor.
     '''
-    general = {k: 0 for k in DATA_COLLECTED.keys()}
+    general = _create_stats()
 
     if args.interval == 'hourly':
-        general['int'] = {hr: {k: 0 for k in DATA_COLLECTED.keys()} for hr in range(24)}
+        general['int'] = {hr: _create_stats() for hr in range(24)}
     elif args.interval == 'monthly' or args.interval == 'yearly':
         general['int'] = {}
 
@@ -145,9 +151,9 @@ def get_interval_tsv(stats, interval):
     participants = list(filter(lambda name: name != 'intervals', stats.keys()))
 
     # Returns a dictionary of statistics of a given person by interval
-    get_person_stats = lambda p: stats[p]['int'][interval]
+    get_person_stats = lambda p: stats[p]['int'].get(interval, _create_stats())
     # Returns a list of keys of statistics of a given person by interval
-    get_person_keys = lambda p: stats[p]['int'][interval].keys()
+    get_person_keys = lambda p: get_person_stats(p).keys()
     # Returns a TSV string of statistics of a given person, in order of keys
     get_combined_stats = lambda p: '\t'.join(map(lambda k: str(get_person_stats(p)[k]), get_person_keys(p)))
 
@@ -187,7 +193,7 @@ def pretty_print_stats(stats, args):
 
     # Interval statistics
     ksizes = len(DATA_COLLECTED.keys())
-    print('Order\t%s' % '\t'.join(map(lambda p: p + '\t.' * ksizes, participants)))
+    print('Order\t%s' % ''.join(map(lambda p: (p + '\t') * ksizes, participants)))
     print('Interval\t%s' % '\t'.join(list(DATA_COLLECTED.keys()) * len(participants)))
     print_interval_stats(stats, args.interval)
 
@@ -264,7 +270,7 @@ def handle_reactions(stats, interval, msg):
 
         if interval not in stats[actor]['int']:
             # Add the keys if they don't already exist
-            stats[actor]['int'][interval] = {k: 0 for k in DATA_COLLECTED.keys()}
+            stats[actor]['int'][interval] = _create_stats()
 
         stats[actor]['reactions'] += 1
         stats[actor]['int'][interval]['reactions'] += 1
@@ -298,7 +304,7 @@ def analyze(folder, args):
             stats['intervals'].append(interval)
         if interval not in stats[name]['int']:
             # Add the keys if they don't already exist
-            stats[name]['int'][interval] = {k: 0 for k in DATA_COLLECTED.keys()}
+            stats[name]['int'][interval] = _create_stats()
 
         if msg.get('content'):
             handle_content(stats, interval, msg)
