@@ -16,11 +16,13 @@ analysis of similar function.
 '''
 import argparse as ap
 import json
+import sys
+import os
 from glob import glob
 from operator import itemgetter
 from functools import reduce
 from datetime import datetime
-from os.path import basename, join
+from os.path import basename, join, exists
 from emoji import UNICODE_EMOJI
 
 DATA_COLLECTED = {'msgs_sent': 'Messages sent',
@@ -43,6 +45,7 @@ def get_args():
 
     parser.add_argument('folder', type=str, help='Folder to FB messages')
     parser.add_argument('-t', '--interval', default='hourly', type=str, choices=INTERVALS, help='Time interval for analysis')
+    parser.add_argument('--threshold', default=10, type=int, help='Conversations below this will be ignored')
 
     manual_group = parser.add_mutually_exclusive_group()
     manual_group.add_argument('-l', '--limit', type=int, default=5, help='Limit to relevant groups')
@@ -51,6 +54,7 @@ def get_args():
     person_group = parser.add_mutually_exclusive_group(required=True)
     person_group.add_argument('-p', '--person', type=str, help='Person to search')
     person_group.add_argument('-i', '--interactive', action='store_true', help='Interactive mode')
+    person_group.add_argument('-a', '--all', action='store_true', help='Does all')
 
     return parser.parse_args()
 
@@ -159,43 +163,54 @@ def get_interval_tsv(stats, interval):
 
     return '\t'.join(map(get_combined_stats, participants))
 
-def print_general_stats(stats):
+def print_general_stats(stats, where):
     '''
     Prints all general statistics in TSV.
     '''
 
     for k, v in DATA_COLLECTED.items():
-        print('%s\t%s' % (v, '\t'.join(get_property(stats, k))))
+        print('%s\t%s' % (v, '\t'.join(get_property(stats, k))), file=where)
 
-def print_interval_stats(stats, interval):
+def print_interval_stats(stats, interval, where):
     '''
     Prints the statistics based on hourly, monthly, or yearly intervals
     '''
     if interval == 'hourly':
         for hr in range(24):
-            print('%d\t%s' % (hr, get_interval_tsv(stats, hr)))
+            print('%d\t%s' % (hr, get_interval_tsv(stats, hr)), file=where)
     elif interval == 'monthly' or interval == 'yearly':
         for interval in stats['intervals']:
-            print('%s\t%s' % (interval, get_interval_tsv(stats, interval)))
+            print('%s\t%s' % (interval, get_interval_tsv(stats, interval)), file=where)
 
-def pretty_print_stats(stats, args):
+def pretty_print_stats(stats, args, where=None):
     '''
     Prints the statistics prettily
     '''
+    if where is None:
+        where = sys.stdout
+    else:
+        where = open(where, 'w')
+
     participants = list(filter(lambda name: name != 'intervals', stats.keys()))
     # Some general informations
-    print('Total Messages sent\t%d' % sum(get_property(stats, 'msgs_sent', t=int)))
-    print('Participants\t%s' % '\t'.join(participants))
+    print('Total Messages sent\t%d' % sum(get_property(stats, 'msgs_sent', t=int)), file=where)
+    print('Participants\t%s' % '\t'.join(participants), file=where)
 
-    print()
-    print_general_stats(stats)
-    print()
+    print(file=where)
+    print_general_stats(stats, where)
+    print(file=where)
 
     # Interval statistics
     ksizes = len(DATA_COLLECTED.keys())
-    print('Order\t%s' % ''.join(map(lambda p: (p + '\t') * ksizes, participants)))
-    print('Interval\t%s' % '\t'.join(list(DATA_COLLECTED.keys()) * len(participants)))
-    print_interval_stats(stats, args.interval)
+    print('Order\t%s' % ''.join(map(lambda p: (p + '\t') * ksizes,
+        participants)), file=where)
+    print('Interval\t%s' % '\t'.join(list(DATA_COLLECTED.keys()) *
+        len(participants)), file=where)
+    print_interval_stats(stats, args.interval, where)
+
+    # Good manners
+    if where != sys.stdout:
+        where.close()
 
 def get_correct_interval(stamp, args):
     '''
@@ -266,6 +281,11 @@ def handle_reactions(stats, interval, msg):
     name = msg['sender_name']
 
     for rs in msg['reactions']:
+        # Sometimes, there is no actor for some odd reason
+        # I'm guessing that the user deleted their (her) FB account, thus making
+        # it come up blank
+        if not rs.get('actor'): continue
+
         actor = rs['actor']
 
         if interval not in stats[actor]['int']:
@@ -275,14 +295,18 @@ def handle_reactions(stats, interval, msg):
         stats[actor]['reactions'] += 1
         stats[actor]['int'][interval]['reactions'] += 1
 
-def analyze(folder, args):
+def analyze(folder, args, where=None):
     '''
     Given the folder of the conversation to analyze, prints out (in TSV format)
-    some statistics of the conversation.
+    some statistics of the conversation. Returns true on success.
     '''
+    # Check to see if there is a message.json file
+    msg_json_path = join(folder, 'message.json')
+    if not exists(msg_json_path): return False
+
     # First, do a bit of processing on the JSON (now python dict), because if
     # you don't, there will be a lot of duplicated code.
-    with open(join(folder, 'message.json'), 'r') as fp:
+    with open(msg_json_path, 'r') as fp:
         convo = json.load(fp)
         # Adds 'timestamp' into the dict, for each and every one of them
         for i in range(len(convo['messages'])):
@@ -290,14 +314,25 @@ def analyze(folder, args):
             ts = datetime.fromtimestamp(int(ts) / 1e3)
             convo['messages'][i]['timestamp'] = ts
 
+    # Threshold checking
+    if len(convo['messages']) <= args.threshold:
+        return False
+
     # Now, let's have fun.
     stats = {p['name']: create_stats(args) for p in convo['participants']}
     stats['intervals'] = []
 
     for msg in convo['messages']:
+        # Some messages are generated; ignore them
+        if not msg.get('sender_name'): continue
         # Calculate the interval first
         interval = get_correct_interval(msg['timestamp'], args)
         name = msg['sender_name']
+
+        # Sometimes, the names disappear from the participants
+        # Just add them in if they don't exist again
+        if name not in stats:
+            stats[name] = create_stats(args)
 
         if interval not in stats['intervals']:
             # Add interval for quick reference later
@@ -322,12 +357,15 @@ def analyze(folder, args):
         # Only names, please....
         if name == 'intervals': continue
 
-        stats[name]['avg_msg_len'] /= stats[name]['msgs_sent']
+        if stats[name]['avg_msg_len'] > 0:
+            stats[name]['avg_msg_len'] /= stats[name]['msgs_sent']
+
         for interval in stats[name]['int'].keys():
             if stats[name]['int'][interval]['msgs_sent'] > 0:
                 stats[name]['int'][interval]['avg_msg_len'] /= stats[name]['int'][interval]['msgs_sent']
 
-    pretty_print_stats(stats, args)
+    pretty_print_stats(stats, args, where)
+    return True
 
 def main():
     '''
@@ -364,6 +402,17 @@ def main():
                 analyze(relevant, args)
             else:
                 print('Could not find `%s`. Please try again.' % query)
+    elif args.all:
+        # Create the folder to put things in
+        folder_name = 'analyzed'
+        if not exists(folder_name):
+            os.makedirs(folder_name)
+
+        for i, convo in enumerate(convos, 1):
+            filename = join(folder_name, basename(convo) + '.tsv')
+            name = basename(convo).split('_')[0]
+            print('(%04d/%04d) %s' % (i, len(convos), name), end='')
+            print('...Ok' if analyze(convo, args, filename) else '...Fail')
 
 if __name__ == '__main__':
     main()
