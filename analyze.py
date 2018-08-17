@@ -399,7 +399,9 @@ def main():
 
             if relevants:
                 relevant = select_relevant_convo(relevants)
-                analyze(relevant, args)
+
+                if relevant:
+                    analyze(relevant, args)
             else:
                 print('Could not find `%s`. Please try again.' % query)
     elif args.all:
